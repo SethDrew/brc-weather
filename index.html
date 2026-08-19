@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BRC Weather</title>
+<style>
+:root {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255,255,255,0.10);
+  --series: #3987e5;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series: #2a78d6;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 12px;
+  max-width: 860px;
+  margin-inline: auto;
+}
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 4px 0 12px; }
+h1 { font-size: 20px; margin: 0; }
+#meta { color: var(--muted); font-size: 13px; }
+#refresh {
+  margin-left: auto; background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px;
+  font-size: 14px; cursor: pointer; min-height: 40px;
+}
+#stale {
+  display: none; background: var(--critical); color: #fff; border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 12px; font-weight: 600;
+}
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px; margin-bottom: 12px;
+}
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 30px; font-weight: 600; margin-top: 2px; }
+.tile .sub { color: var(--muted); font-size: 13px; }
+.tile .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--ink-2); }
+#chartwrap { position: relative; }
+#chart { width: 100%; height: auto; display: block; touch-action: pan-y; }
+#tooltip {
+  position: absolute; display: none; pointer-events: none; z-index: 2;
+  background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 13px; white-space: nowrap; color: var(--ink-2);
+}
+#tooltip .t { color: var(--ink); font-weight: 600; }
+#tooltip table { border-collapse: collapse; }
+#tooltip td { padding: 1px 6px 1px 0; font-variant-numeric: tabular-nums; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-top: 8px; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.key-line { width: 18px; height: 2px; background: var(--series); border-radius: 1px; }
+.key-band { width: 18px; height: 10px; background: var(--series); opacity: .18; border-radius: 2px; }
+.key-dot { width: 10px; height: 10px; border-radius: 50%; }
+#strip { display: flex; gap: 1px; margin-top: 10px; border-radius: 4px; overflow: hidden; }
+#strip div { flex: 1; height: 12px; }
+.days { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 8px; }
+.day { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 13px; }
+.day .name { font-weight: 600; }
+.day .temps { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.day .gust { font-size: 17px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.day .cond { color: var(--ink-2); }
+.day .rain { color: var(--muted); }
+details summary { cursor: pointer; font-weight: 600; color: var(--ink-2); min-height: 32px; }
+#afdtext { white-space: pre-wrap; font-size: 13px; color: var(--ink-2); max-height: 420px; overflow-y: auto; margin-top: 10px; }
+footer { color: var(--muted); font-size: 12px; margin: 16px 0 8px; }
+footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BRC Weather</h1>
+  <div id="meta">loading…</div>
+  <button id="refresh">Refresh</button>
+</header>
+<div id="stale"></div>
+<div class="tiles" id="tiles"></div>
+<div class="card">
+  <h2>Gusts — next 48h (mph)</h2>
+  <div id="chartwrap">
+    <svg id="chart" viewBox="0 0 800 270" role="img" aria-label="Gust forecast chart"></svg>
+    <div id="tooltip"></div>
+  </div>
+  <div id="strip"></div>
+  <div class="legend">
+    <span class="key"><span class="key-line"></span>HRRR gusts</span>
+    <span class="key"><span class="key-band"></span>Model spread (GFS · ECMWF · ICON)</span>
+  </div>
+  <div class="legend" id="striplegend"></div>
+</div>
+<div class="card">
+  <h2>7-day outlook</h2>
+  <div class="days" id="days"></div>
+</div>
+<div class="card">
+  <details id="afd">
+    <summary>NWS Reno forecast discussion</summary>
+    <div id="afdtext">expand to load…</div>
+  </details>
+</div>
+<footer>
+  Black Rock City · 40.786, −119.204 ·
+  Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC-BY 4.0) ·
+  Discussion from <a href="https://www.weather.gov/rev/">NWS Reno</a>
+</footer>
+<script>
+const LAT = 40.786, LON = -119.204;
+const MODELS = [
+  { id: "gfs_hrrr", label: "HRRR" },
+  { id: "gfs_seamless", label: "GFS" },
+  { id: "ecmwf_ifs025", label: "ECMWF" },
+  { id: "icon_seamless", label: "ICON" },
+];
+const VARS = ["temperature_2m", "precipitation", "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m"];
+const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
+  `&hourly=${VARS.join(",")}&models=${MODELS.map(m => m.id).join(",")}` +
+  `&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=7`;
+const CACHE_KEY = "brcwx-v1";
+const TTL = 10 * 60 * 1000;
+const LEVELS = [
+  { max: 15, name: "Calm", varname: "--good" },
+  { max: 25, name: "Breezy", varname: "--warning" },
+  { max: 35, name: "Dusty", varname: "--serious" },
+  { max: Infinity, name: "Whiteout risk", varname: "--critical" },
+];
+
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const level = g => LEVELS.find(l => g < l.max);
+const fmtTime = ts => new Date(ts + ":00-07:00");
+const dirArrow = deg => `<span style="display:inline-block;transform:rotate(${deg + 180}deg)">↑</span>`;
+const compass = deg => ["N","NE","E","SE","S","SW","W","NW"][Math.round(deg / 45) % 8];
+
+function get(data, varname, model, i) {
+  const arr = data.hourly[`${varname}_${model}`];
+  return arr ? arr[i] : null;
+}
+
+async function load(force) {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(CACHE_KEY)); } catch {}
+  if (cached && !force && Date.now() - cached.ts < TTL) return render(cached.data, cached.ts, false);
+  try {
+    const res = await fetch(API);
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    const ts = Date.now();
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts, data })); } catch {}
+    render(data, ts, false);
+  } catch (e) {
+    if (cached) render(cached.data, cached.ts, true);
+    else document.getElementById("meta").textContent = "fetch failed — no cached data";
+  }
+}
+
+function render(data, ts, stale) {
+  const ageMin = Math.round((Date.now() - ts) / 60000);
+  document.getElementById("meta").textContent = `updated ${ageMin < 1 ? "just now" : ageMin + " min ago"}`;
+  const staleEl = document.getElementById("stale");
+  if (stale) {
+    staleEl.style.display = "block";
+    staleEl.textContent = `⚠ Offline — showing data from ${ageMin >= 60 ? Math.round(ageMin / 60) + "h" : ageMin + " min"} ago`;
+  } else staleEl.style.display = "none";
+
+  const times = data.hourly.time;
+  const now = Date.now();
+  let i0 = times.findIndex(t => fmtTime(t).getTime() >= now - 3600e3);
+  if (i0 < 0) i0 = 0;
+  const N = Math.min(48, times.length - i0);
+
+  const hrrrGust = i => get(data, "wind_gusts_10m", "gfs_hrrr", i);
+  const bestGust = i => {
+    const h = hrrrGust(i);
+    if (h != null) return h;
+    const vals = MODELS.map(m => get(data, "wind_gusts_10m", m.id, i)).filter(v => v != null);
+    return vals.length ? Math.max(...vals) : null;
+  };
+
+  renderTiles(data, i0, N, bestGust);
+  renderChart(data, times, i0, N);
+  renderStrip(data, times, i0, N, bestGust);
+  renderDays(data, times);
+}
+
+function renderTiles(data, i0, N, bestGust) {
+  const g = bestGust(i0);
+  const t = get(data, "temperature_2m", "gfs_hrrr", i0) ?? get(data, "temperature_2m", "gfs_seamless", i0);
+  const d = get(data, "wind_direction_10m", "gfs_hrrr", i0) ?? get(data, "wind_direction_10m", "gfs_seamless", i0);
+  const s = get(data, "wind_speed_10m", "gfs_hrrr", i0) ?? get(data, "wind_speed_10m", "gfs_seamless", i0);
+  let peak = 0, peakAt = i0;
+  for (let i = i0; i < i0 + Math.min(12, N); i++) {
+    const v = bestGust(i);
+    if (v != null && v > peak) { peak = v; peakAt = i; }
+  }
+  const lv = level(g ?? 0), lvPeak = level(peak);
+  const peakTime = fmtTime(data.hourly.time[peakAt]).toLocaleTimeString([], { hour: "numeric" });
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile"><div class="label">Gusts now</div>
+      <div class="value">${g == null ? "—" : Math.round(g)}<small style="font-size:15px;color:var(--muted)"> mph</small></div>
+      <div class="sub"><span class="dot" style="background:var(${lv.varname})"></span>${lv.name}</div></div>
+    <div class="tile"><div class="label">Peak next 12h</div>
+      <div class="value">${Math.round(peak)}<small style="font-size:15px;color:var(--muted)"> mph</small></div>
+      <div class="sub"><span class="dot" style="background:var(${lvPeak.varname})"></span>${lvPeak.name} · ${peakTime}</div></div>
+    <div class="tile"><div class="label">Wind</div>
+      <div class="value">${s == null ? "—" : Math.round(s)}<small style="font-size:15px;color:var(--muted)"> mph</small></div>
+      <div class="sub">${d == null ? "" : dirArrow(d) + " from " + compass(d)}</div></div>
+    <div class="tile"><div class="label">Temp</div>
+      <div class="value">${t == null ? "—" : Math.round(t) + "°"}</div>
+      <div class="sub">at the trash fence it's worse</div></div>`;
+}
+
+function renderChart(data, times, i0, N) {
+  const W = 800, H = 270, ML = 34, MR = 10, MT = 12, MB = 34;
+  const iw = W - ML - MR, ih = H - MT - MB;
+  const svg = document.getElementById("chart");
+  const pts = [];
+  let ymax = 40;
+  for (let k = 0; k < N; k++) {
+    const i = i0 + k;
+    const perModel = MODELS.map(m => get(data, "wind_gusts_10m", m.id, i));
+    const valid = perModel.filter(v => v != null);
+    const p = {
+      k, i,
+      hrrr: perModel[0],
+      lo: valid.length ? Math.min(...valid) : null,
+      hi: valid.length ? Math.max(...valid) : null,
+      perModel,
+    };
+    if (p.hi != null && p.hi > ymax) ymax = p.hi;
+    pts.push(p);
+  }
+  ymax = Math.ceil(ymax / 10) * 10 + 5;
+  const X = k => ML + (k / (N - 1)) * iw;
+  const Y = v => MT + ih - (v / ymax) * ih;
+
+  let el = "";
+  for (let v = 10; v < ymax; v += 10)
+    el += `<line x1="${ML}" y1="${Y(v)}" x2="${W - MR}" y2="${Y(v)}" stroke="${css("--grid")}" stroke-width="1"/>` +
+          `<text x="${ML - 6}" y="${Y(v) + 4}" fill="${css("--muted")}" font-size="11" text-anchor="end" font-variant-numeric="tabular-nums">${v}</text>`;
+  el += `<line x1="${ML}" y1="${Y(0)}" x2="${W - MR}" y2="${Y(0)}" stroke="${css("--axis")}" stroke-width="1"/>`;
+
+  for (const th of [25, 35])
+    el += `<line x1="${ML}" y1="${Y(th)}" x2="${W - MR}" y2="${Y(th)}" stroke="${css(th === 25 ? "--serious" : "--critical")}" stroke-width="1" opacity="0.5"/>` +
+          `<text x="${W - MR - 2}" y="${Y(th) - 3}" fill="${css("--muted")}" font-size="10" text-anchor="end">${th}</text>`;
+
+  for (let k = 0; k < N; k++) {
+    const d = fmtTime(times[i0 + k]);
+    const h = d.getHours();
+    if (h % 6 === 0) {
+      const lab = h === 0 ? d.toLocaleDateString([], { weekday: "short" }) : d.toLocaleTimeString([], { hour: "numeric" }).toLowerCase().replace(" ", "");
+      el += `<text x="${X(k)}" y="${H - 14}" fill="${css("--muted")}" font-size="11" text-anchor="middle" ${h === 0 ? 'font-weight="600"' : ""}>${lab}</text>`;
+      if (h === 0 && k > 0) el += `<line x1="${X(k)}" y1="${MT}" x2="${X(k)}" y2="${MT + ih}" stroke="${css("--axis")}" stroke-width="1"/>`;
+    }
+  }
+
+  const bandPts = pts.filter(p => p.lo != null);
+  if (bandPts.length > 1) {
+    const top = bandPts.map(p => `${X(p.k)},${Y(p.hi)}`).join(" ");
+    const bot = [...bandPts].reverse().map(p => `${X(p.k)},${Y(p.lo)}`).join(" ");
+    el += `<polygon points="${top} ${bot}" fill="${css("--series")}" opacity="0.15"/>`;
+  }
+  const linePts = pts.filter(p => p.hrrr != null);
+  if (linePts.length > 1)
+    el += `<polyline points="${linePts.map(p => `${X(p.k)},${Y(p.hrrr)}`).join(" ")}" fill="none" stroke="${css("--series")}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const last = linePts[linePts.length - 1];
+  if (last)
+    el += `<circle cx="${X(last.k)}" cy="${Y(last.hrrr)}" r="4" fill="${css("--series")}" stroke="${css("--surface")}" stroke-width="2"/>` +
+          `<text x="${X(last.k) - 6}" y="${Y(last.hrrr) - 8}" fill="${css("--ink-2")}" font-size="11" text-anchor="end">${Math.round(last.hrrr)}</text>`;
+
+  el += `<line id="xhair" x1="0" y1="${MT}" x2="0" y2="${MT + ih}" stroke="${css("--ink-2")}" stroke-width="1" opacity="0" pointer-events="none"/>`;
+  svg.innerHTML = el;
+
+  const tip = document.getElementById("tooltip");
+  const xhair = () => svg.querySelector("#xhair");
+  const onmove = ev => {
+    const rect = svg.getBoundingClientRect();
+    const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+    const k = Math.max(0, Math.min(N - 1, Math.round(((cx / rect.width) * W - ML) / iw * (N - 1))));
+    const p = pts[k];
+    const xh = xhair();
+    xh.setAttribute("x1", X(k)); xh.setAttribute("x2", X(k)); xh.setAttribute("opacity", "0.5");
+    const dt = fmtTime(times[p.i]);
+    const dir = get(data, "wind_direction_10m", "gfs_hrrr", p.i) ?? get(data, "wind_direction_10m", "gfs_seamless", p.i);
+    const rows = MODELS.map((m, mi) =>
+      `<tr><td>${m.label}</td><td>${p.perModel[mi] == null ? "—" : Math.round(p.perModel[mi]) + " mph"}</td></tr>`).join("");
+    tip.innerHTML = `<div class="t">${dt.toLocaleDateString([], { weekday: "short" })} ${dt.toLocaleTimeString([], { hour: "numeric" })}` +
+      `${dir == null ? "" : " · from " + compass(dir)}</div><table>${rows}</table>`;
+    tip.style.display = "block";
+    const left = (X(k) / W) * rect.width;
+    tip.style.left = Math.min(rect.width - tip.offsetWidth - 4, Math.max(4, left + 12)) + "px";
+    tip.style.top = "8px";
+  };
+  svg.onmousemove = onmove;
+  svg.ontouchstart = onmove;
+  svg.ontouchmove = onmove;
+  svg.onmouseleave = () => { tip.style.display = "none"; xhair().setAttribute("opacity", "0"); };
+}
+
+function renderStrip(data, times, i0, N, bestGust) {
+  const strip = document.getElementById("strip");
+  strip.innerHTML = "";
+  for (let k = 0; k < N; k++) {
+    const g = bestGust(i0 + k);
+    const cell = document.createElement("div");
+    cell.style.background = g == null ? css("--axis") : css(level(g).varname);
+    const dt = fmtTime(times[i0 + k]);
+    cell.title = `${dt.toLocaleTimeString([], { hour: "numeric" })} — ${g == null ? "no data" : Math.round(g) + " mph, " + level(g).name}`;
+    strip.appendChild(cell);
+  }
+  document.getElementById("striplegend").innerHTML = LEVELS.map(l =>
+    `<span class="key"><span class="key-dot" style="background:var(${l.varname})"></span>${l.name}${l.max !== Infinity ? " &lt;" + l.max : " 35+"}</span>`).join("");
+}
+
+function renderDays(data, times) {
+  const byDate = {};
+  times.forEach((t, i) => {
+    const d = t.slice(0, 10);
+    (byDate[d] ??= []).push(i);
+  });
+  const html = Object.entries(byDate).map(([date, idxs]) => {
+    let hi = -999, lo = 999, gmax = 0, gmaxDir = null, rain = 0;
+    for (const i of idxs) {
+      const t = get(data, "temperature_2m", "gfs_seamless", i);
+      if (t != null) { hi = Math.max(hi, t); lo = Math.min(lo, t); }
+      for (const m of MODELS) {
+        const g = get(data, "wind_gusts_10m", m.id, i);
+        if (g != null && g > gmax) { gmax = g; gmaxDir = get(data, "wind_direction_10m", m.id, i); }
+      }
+      const p = get(data, "precipitation", "gfs_seamless", i) ?? 0;
+      rain += p;
+    }
+    const lv = level(gmax);
+    const d = fmtTime(times[idxs[0]]);
+    return `<div class="day">
+      <div class="name">${d.toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" })}</div>
+      <div class="temps">${hi === -999 ? "—" : Math.round(hi) + "° / " + Math.round(lo) + "°"}</div>
+      <div class="gust"><span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:var(${lv.varname})"></span>${Math.round(gmax)} mph</div>
+      <div class="cond">${lv.name}${gmaxDir == null ? "" : " · " + compass(gmaxDir)}</div>
+      ${rain > 0.1 ? `<div class="rain">☂ ${(rain / 25.4).toFixed(2)}″</div>` : ""}
+    </div>`;
+  }).join("");
+  document.getElementById("days").innerHTML = html;
+}
+
+document.getElementById("afd").addEventListener("toggle", async ev => {
+  if (!ev.target.open) return;
+  const box = document.getElementById("afdtext");
+  if (box.dataset.loaded) return;
+  box.textContent = "loading…";
+  try {
+    const list = await (await fetch("https://api.weather.gov/products/types/AFD/locations/REV")).json();
+    const latest = list["@graph"][0]["@id"];
+    const prod = await (await fetch(latest)).json();
+    box.textContent = prod.productText;
+    box.dataset.loaded = "1";
+  } catch {
+    box.textContent = "couldn't load — try again when connection improves";
+  }
+});
+
+document.getElementById("refresh").addEventListener("click", () => load(true));
+load(false);
+</script>
+</body>
+</html>
