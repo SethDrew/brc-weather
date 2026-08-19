@@ -59,6 +59,22 @@ h1 { font-size: 20px; margin: 0; }
   display: none; background: var(--critical); color: #fff; border-radius: 8px;
   padding: 10px 14px; margin-bottom: 12px; font-weight: 600;
 }
+.al {
+  background: var(--critical); color: #fff; border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 12px; font-weight: 600;
+}
+.al small { display: block; font-weight: 400; opacity: 0.9; }
+#squall {
+  background: var(--serious); color: #1a1a19; border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 12px; font-weight: 600;
+}
+.seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  background: var(--surface); color: var(--ink-2); border: 0; padding: 6px 12px;
+  font-size: 13px; cursor: pointer; min-height: 32px;
+}
+.seg button.on { background: var(--axis); color: var(--ink); font-weight: 600; }
+#obsbar { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; color: var(--ink-2); }
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 12px; padding: 14px; margin-bottom: 12px;
@@ -116,7 +132,10 @@ footer a { color: var(--muted); }
   <button id="refresh">Refresh</button>
 </header>
 <div id="stale"></div>
+<div id="alerts"></div>
+<div id="squall" style="display:none"></div>
 <div class="tiles" id="tiles"></div>
+<div id="obsbar"></div>
 <div class="card">
   <h2>Gusts — next 48h (mph)</h2>
   <div id="chartwrap">
@@ -131,6 +150,11 @@ footer a { color: var(--muted); }
     <span class="key">↗ arrows point downwind</span>
   </div>
   <div class="legend" id="striplegend"></div>
+  <div class="legend" style="align-items:center">
+    <span>Playa surface:</span>
+    <span class="seg" id="surfseg"></span>
+    <span style="color:var(--muted)">fluff years whiteout at lower wind</span>
+  </div>
   <div id="events"></div>
 </div>
 <div class="card">
@@ -169,21 +193,23 @@ const MODELS = [
   { id: "ecmwf_ifs025", label: "ECMWF" },
   { id: "icon_seamless", label: "ICON" },
 ];
-const VARS = ["temperature_2m", "precipitation", "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m"];
+const VARS = ["temperature_2m", "precipitation", "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m", "cape"];
 const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
   `&hourly=${VARS.join(",")}&models=${MODELS.map(m => m.id).join(",")}` +
   `&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=7`;
 const CACHE_KEY = "brcwx-v1";
 const TTL = 10 * 60 * 1000;
-const LEVELS = [
-  { max: 15, name: "Calm", varname: "--good" },
-  { max: 25, name: "Breezy", varname: "--warning" },
-  { max: 35, name: "Dusty", varname: "--serious" },
-  { max: Infinity, name: "Whiteout risk", varname: "--critical" },
-];
+const SURFACES = { hard: [18, 30, 40], normal: [15, 25, 35], fluff: [12, 20, 28] };
+let surface = localStorage.getItem("brcwx-surface") || "normal";
+const LVL_META = [["Calm", "--good"], ["Breezy", "--warning"], ["Whiteout possible", "--serious"], ["Destructive", "--critical"]];
+const thresholds = () => SURFACES[surface];
 
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-const level = g => LEVELS.find(l => g < l.max);
+const level = g => {
+  const t = thresholds();
+  const i = g < t[0] ? 0 : g < t[1] ? 1 : g < t[2] ? 2 : 3;
+  return { name: LVL_META[i][0], varname: LVL_META[i][1] };
+};
 const fmtTime = ts => new Date(ts + ":00-07:00");
 const dirArrow = deg => `<span style="display:inline-block;transform:rotate(${deg + 180}deg)">↑</span>`;
 const compass = deg => ["N","NE","E","SE","S","SW","W","NW"][Math.round(deg / 45) % 8];
@@ -210,7 +236,72 @@ async function load(force) {
   }
 }
 
+let lastRender = null;
+
+function renderSurfSeg() {
+  const seg = document.getElementById("surfseg");
+  seg.innerHTML = [["hard", "hard-pack"], ["normal", "normal"], ["fluff", "fluff"]].map(([v, l]) =>
+    `<button class="${surface === v ? "on" : ""}" data-s="${v}">${l}</button>`).join("");
+  seg.querySelectorAll("button").forEach(b => b.onclick = () => {
+    surface = b.dataset.s;
+    try { localStorage.setItem("brcwx-surface", surface); } catch {}
+    if (lastRender) render(...lastRender);
+  });
+}
+
+function renderSquall(data, times, i0, N) {
+  const box = document.getElementById("squall");
+  const ranges = [];
+  let cur = null;
+  for (let k = 0; k < N; k++) {
+    const i = i0 + k;
+    const cape = Math.max(...MODELS.map(m => get(data, "cape", m.id, i)).filter(v => v != null), 0);
+    if (cape >= 800) {
+      if (cur && k - cur.end <= 2) cur.end = k;
+      else { if (cur) ranges.push(cur); cur = { start: k, end: k }; }
+    }
+  }
+  if (cur) ranges.push(cur);
+  if (!ranges.length) { box.style.display = "none"; return; }
+  const fmtH = k => {
+    const d = fmtTime(times[i0 + k]);
+    return d.toLocaleDateString([], { weekday: "short" }) + " " + d.toLocaleTimeString([], { hour: "numeric" }).toLowerCase().replace(" ", "");
+  };
+  box.style.display = "block";
+  box.innerHTML = `⛈ Squall watch ${ranges.map(r => fmtH(r.start) + "–" + fmtH(r.end)).join(", ")} — ` +
+    `storm outflow can far exceed forecast gusts (Aug&nbsp;'25: models ~25, measured 52)`;
+}
+
+async function fetchAlerts() {
+  const box = document.getElementById("alerts");
+  try {
+    const r = await fetch(`https://api.weather.gov/alerts/active?point=${LAT},${LON}`);
+    const j = await r.json();
+    const feats = (j.features || []).slice(0, 3);
+    box.innerHTML = feats.map(f =>
+      `<div class="al">⚠ ${f.properties.event}<small>${f.properties.headline || ""}</small></div>`).join("");
+  } catch {}
+}
+
+async function fetchObs() {
+  const bar = document.getElementById("obsbar");
+  try {
+    const r = await fetch("https://api.weather.com/v2/pws/observations/current?stationId=KNVLOVEL7&format=json&units=e&apiKey=e1f10a1e78da46f5b10a1e78da96f525");
+    const o = (await r.json()).observations?.[0];
+    if (!o) return;
+    const im = o.imperial || {};
+    const lv = level(im.windGust ?? 0);
+    bar.style.display = "block";
+    bar.innerHTML = `<b style="color:var(--ink)">Measured at BRC Airport</b> ${o.obsTimeLocal.slice(11, 16)} — ` +
+      `<span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(${lv.varname})"></span> ` +
+      `gusts ${Math.round(im.windGust ?? 0)} mph, sustained ${Math.round(im.windSpeed ?? 0)}` +
+      `${o.winddir == null ? "" : ", from " + compass(o.winddir) + " " + dirArrow(o.winddir)}` +
+      `${im.temp == null ? "" : " · " + Math.round(im.temp) + "°"}`;
+  } catch {}
+}
+
 function render(data, ts, stale) {
+  lastRender = [data, ts, stale];
   const ageMin = Math.round((Date.now() - ts) / 60000);
   document.getElementById("meta").textContent = `updated ${ageMin < 1 ? "just now" : ageMin + " min ago"}`;
   const staleEl = document.getElementById("stale");
@@ -242,6 +333,8 @@ function render(data, ts, stale) {
   renderTemp(data, times, i0, N);
   renderMap(data, times, i0, N, bestGust);
   renderDays(data, times);
+  renderSurfSeg();
+  renderSquall(data, times, i0, N);
 }
 
 function renderTiles(data, i0, N, bestGust) {
@@ -405,8 +498,8 @@ function renderChart(data, times, i0, N) {
           `<text x="${ML - 6}" y="${Y(v) + 4}" fill="${css("--muted")}" font-size="11" text-anchor="end" font-variant-numeric="tabular-nums">${v}</text>`;
   el += `<line x1="${ML}" y1="${Y(0)}" x2="${W - MR}" y2="${Y(0)}" stroke="${css("--axis")}" stroke-width="1"/>`;
 
-  for (const th of [25, 35])
-    el += `<line x1="${ML}" y1="${Y(th)}" x2="${W - MR}" y2="${Y(th)}" stroke="${css(th === 25 ? "--serious" : "--critical")}" stroke-width="1" opacity="0.5"/>` +
+  for (const th of [thresholds()[1], thresholds()[2]])
+    el += `<line x1="${ML}" y1="${Y(th)}" x2="${W - MR}" y2="${Y(th)}" stroke="${css(th === thresholds()[1] ? "--serious" : "--critical")}" stroke-width="1" opacity="0.5"/>` +
           `<text x="${W - MR - 2}" y="${Y(th) - 3}" fill="${css("--muted")}" font-size="10" text-anchor="end">${th}</text>`;
 
   for (let k = 0; k < N; k++) {
@@ -473,8 +566,9 @@ function renderStrip(data, times, i0, N, bestGust) {
     cell.title = `${dt.toLocaleTimeString([], { hour: "numeric" })} — ${g == null ? "no data" : Math.round(g) + " mph, " + level(g).name}`;
     strip.appendChild(cell);
   }
-  document.getElementById("striplegend").innerHTML = LEVELS.map(l =>
-    `<span class="key"><span class="key-dot" style="background:var(${l.varname})"></span>${l.name}${l.max !== Infinity ? " &lt;" + l.max : " 35+"}</span>`).join("");
+  const t = thresholds();
+  document.getElementById("striplegend").innerHTML = LVL_META.map((m, i) =>
+    `<span class="key"><span class="key-dot" style="background:var(${m[1]})"></span>${m[0]}${i < 3 ? " &lt;" + t[i] : " " + t[2] + "+"}</span>`).join("");
 }
 
 function renderDirStrip(times, i0, N, bestGust, dirAt) {
@@ -503,9 +597,10 @@ function renderEvents(times, i0, N, bestGust, dirAt) {
   const evs = [];
   let cur = null;
   const M = times.length - i0;
+  const T1 = thresholds()[1];
   for (let k = 0; k < M; k++) {
     const g = bestGust(i0 + k);
-    if (g != null && g >= 25) {
+    if (g != null && g >= T1) {
       if (cur && k - cur.end <= 2) cur.end = k;
       else { if (cur) evs.push(cur); cur = { start: k, end: k, peak: 0, peakK: k }; }
       if (g > cur.peak) { cur.peak = g; cur.peakK = k; }
@@ -514,7 +609,7 @@ function renderEvents(times, i0, N, bestGust, dirAt) {
   if (cur) evs.push(cur);
   const box = document.getElementById("events");
   if (!evs.filter(e => e.end > e.start).length) {
-    box.innerHTML = `<div id="noev">No wind events (sustained gusts ≥ 25 mph) in the next 7 days.</div>`;
+    box.innerHTML = `<div id="noev">No wind events (gusts ≥ ${T1} mph) in the next 7 days.</div>`;
     return;
   }
   const fmtH = k => {
@@ -659,8 +754,10 @@ document.getElementById("afd").addEventListener("toggle", async ev => {
   }
 });
 
-document.getElementById("refresh").addEventListener("click", () => load(true));
+document.getElementById("refresh").addEventListener("click", () => { load(true); fetchAlerts(); fetchObs(); });
 load(false);
+fetchAlerts();
+fetchObs();
 </script>
 </body>
 </html>

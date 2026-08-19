@@ -38,3 +38,17 @@ Caveat: reanalysis is ~9–25 km resolution and smooths sub-grid convective gust
 
 Raw hourly JSON can be re-pulled anytime:
 `https://archive-api.open-meteo.com/v1/archive?latitude=40.786&longitude=-119.204&start_date=2025-08-11&end_date=2025-09-01&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,temperature_2m,precipitation&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=America/Los_Angeles`
+
+## Measured vs modeled — station ground truth (added after research)
+
+BRC Airport PWS (Weather Underground KNVLOVEL7), 5-min records, both destructive days:
+
+| Event | Station: span | Max gust | Median gust in storm | Median sustained | ERA5 said |
+|---|---|---|---|---|---|
+| 2025-08-23 dust storm (convective outflow) | 5:30–8:10 PM | **52** | 45.5 | 35 | 27 |
+| 2024-09-02 exodus whiteout (synoptic front) | 11:20 AM–6:40 PM | **44** | 36 | 24 | 34 |
+
+Read: ERA5 captures synoptic wind events at ~0.8× reality but convective squalls at ~0.5×. The dash's forecast models (HRRR) resolve convection far better than ERA5, but point gust forecasts still understate outflow peaks — hence the CAPE-based squall-watch banner.
+
+Station history is pullable per-day:
+`https://api.weather.com/v2/pws/history/all?stationId=KNVLOVEL7&format=json&units=e&date=YYYYMMDD&apiKey=<WU dashboard key>`
