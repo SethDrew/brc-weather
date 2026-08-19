@@ -147,8 +147,7 @@ footer a { color: var(--muted); }
   <div id="dirstrip"></div>
   <div class="legend">
     <span class="key"><span class="key-line"></span>HRRR gusts</span>
-    <span class="key"><span class="key-band"></span>Model spread (GFS · ECMWF · ICON)</span>
-    <span class="key"><span style="display:inline-block;width:18px;border-top:2px dashed var(--critical)"></span>Worst case (top 10% of scenarios)</span>
+    <span class="key"><span class="key-band"></span><span id="bandkey">80% of scenarios land in this band</span></span>
     <span class="key">↗ arrows point downwind</span>
   </div>
   <div class="legend" id="striplegend"></div>
@@ -260,7 +259,7 @@ async function loadEns() {
   ENS = new Map();
   j.hourly.time.forEach((t, i) => {
     const vals = keys.map(k => j.hourly[k][i]).filter(v => v != null).sort((a, b) => a - b);
-    if (vals.length > 5) ENS.set(t, { med: vals[Math.floor(vals.length * 0.5)], p90: vals[Math.floor(vals.length * 0.9)], n: vals.length });
+    if (vals.length > 5) ENS.set(t, { p10: vals[Math.floor(vals.length * 0.1)], med: vals[Math.floor(vals.length * 0.5)], p90: vals[Math.floor(vals.length * 0.9)], n: vals.length });
   });
   if (lastRender) render(...lastRender);
 }
@@ -582,16 +581,18 @@ function renderChart(data, times, i0, N) {
     }
   }
 
-  const bandPts = pts.filter(p => p.lo != null);
-  if (bandPts.length > 1) {
-    const top = bandPts.map(p => `${X(p.k)},${Y(p.hi)}`).join(" ");
-    const bot = [...bandPts].reverse().map(p => `${X(p.k)},${Y(p.lo)}`).join(" ");
+  const ensPts = ENS ? pts.map(p => ({ k: p.k, s: ENS.get(times[p.i]) })).filter(p => p.s) : [];
+  if (ensPts.length > 1) {
+    const top = ensPts.map(p => `${X(p.k)},${Y(p.s.p90)}`).join(" ");
+    const bot = [...ensPts].reverse().map(p => `${X(p.k)},${Y(p.s.p10)}`).join(" ");
     el += `<polygon points="${top} ${bot}" fill="${css("--series")}" opacity="0.15"/>`;
-  }
-  if (ENS) {
-    const wc = pts.map(p => ({ k: p.k, v: ENS.get(times[p.i])?.p90 })).filter(p => p.v != null);
-    if (wc.length > 1)
-      el += `<polyline points="${wc.map(p => `${X(p.k)},${Y(p.v)}`).join(" ")}" fill="none" stroke="${css("--critical")}" stroke-width="2" stroke-dasharray="5 4" opacity="0.7" stroke-linejoin="round"/>`;
+  } else {
+    const bandPts = pts.filter(p => p.lo != null);
+    if (bandPts.length > 1) {
+      const top = bandPts.map(p => `${X(p.k)},${Y(p.hi)}`).join(" ");
+      const bot = [...bandPts].reverse().map(p => `${X(p.k)},${Y(p.lo)}`).join(" ");
+      el += `<polygon points="${top} ${bot}" fill="${css("--series")}" opacity="0.15"/>`;
+    }
   }
   const linePts = pts.filter(p => p.hrrr != null);
   if (linePts.length > 1)
@@ -603,6 +604,7 @@ function renderChart(data, times, i0, N) {
 
   el += `<line id="xhair" x1="0" y1="${MT}" x2="0" y2="${MT + ih}" stroke="${css("--ink-2")}" stroke-width="1" opacity="0" pointer-events="none"/>`;
   svg.innerHTML = el;
+  document.getElementById("bandkey").textContent = ensPts.length > 1 ? "80% of scenarios land in this band" : "Model spread (GFS · ECMWF · ICON)";
 
   const tip = document.getElementById("tooltip");
   const xhair = () => svg.querySelector("#xhair");
@@ -615,8 +617,10 @@ function renderChart(data, times, i0, N) {
     xh.setAttribute("x1", X(k)); xh.setAttribute("x2", X(k)); xh.setAttribute("opacity", "0.5");
     const dt = fmtTime(times[p.i]);
     const dir = get(data, "wind_direction_10m", "gfs_hrrr", p.i) ?? get(data, "wind_direction_10m", "gfs_seamless", p.i);
+    const s = ENS && ENS.get(times[p.i]);
     const rows = MODELS.map((m, mi) =>
-      `<tr><td>${m.label}</td><td>${p.perModel[mi] == null ? "—" : Math.round(p.perModel[mi]) + " mph"}</td></tr>`).join("");
+      `<tr><td>${m.label}</td><td>${p.perModel[mi] == null ? "—" : Math.round(p.perModel[mi]) + " mph"}</td></tr>`).join("") +
+      (s ? `<tr><td>80% range</td><td>${Math.round(s.p10)}–${Math.round(s.p90)} mph</td></tr>` : "");
     tip.innerHTML = `<div class="t">${dt.toLocaleDateString([], { weekday: "short" })} ${dt.toLocaleTimeString([], { hour: "numeric" })}` +
       `${dir == null ? "" : " · from " + compass(dir)}</div><table>${rows}</table>`;
     tip.style.display = "block";
