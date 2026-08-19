@@ -68,12 +68,6 @@ h1 { font-size: 20px; margin: 0; }
   background: var(--serious); color: #1a1a19; border-radius: 8px;
   padding: 10px 14px; margin-bottom: 12px; font-weight: 600;
 }
-.seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.seg button {
-  background: var(--surface); color: var(--ink-2); border: 0; padding: 6px 12px;
-  font-size: 13px; cursor: pointer; min-height: 32px;
-}
-.seg button.on { background: var(--axis); color: var(--ink); font-weight: 600; }
 #obsbar { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; color: var(--ink-2); }
 .card {
   background: var(--surface); border: 1px solid var(--border);
@@ -103,8 +97,6 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--ink-2); }
 .key-dot { width: 10px; height: 10px; border-radius: 50%; }
 #strip { display: flex; gap: 1px; margin-top: 10px; border-radius: 4px; overflow: hidden; }
 #strip div { flex: 1; height: 12px; }
-#dirstrip { display: flex; margin-top: 6px; }
-#dirstrip span { flex: 1; text-align: center; font-size: 15px; line-height: 1; }
 #events { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .ev { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; cursor: pointer; flex-wrap: wrap; }
 .ev .when { font-weight: 600; }
@@ -144,18 +136,13 @@ footer a { color: var(--muted); }
     <div id="tooltip"></div>
   </div>
   <div id="strip"></div>
-  <div id="dirstrip"></div>
+  <svg id="map" viewBox="0 0 800 300" role="img" aria-label="Wind direction over Black Rock City through time" style="width:100%;height:auto;display:block;margin-top:10px"></svg>
   <div class="legend">
     <span class="key"><span class="key-line"></span>HRRR gusts</span>
     <span class="key"><span class="key-band"></span><span id="bandkey">80% of scenarios land in this band</span></span>
-    <span class="key">↗ arrows point downwind</span>
+    <span class="key">↗ map: next 24h, arrows point downwind, length = strength</span>
   </div>
   <div class="legend" id="striplegend"></div>
-  <div class="legend" style="align-items:center">
-    <span>Playa surface:</span>
-    <span class="seg" id="surfseg"></span>
-    <span style="color:var(--muted)">fluff years whiteout at lower wind</span>
-  </div>
   <div id="events"></div>
 </div>
 <div class="card">
@@ -164,11 +151,6 @@ footer a { color: var(--muted); }
     <svg id="tchart" viewBox="0 0 800 200" role="img" aria-label="Temperature forecast chart" style="width:100%;height:auto;display:block;touch-action:pan-y"></svg>
     <div id="ttip" style="position:absolute;display:none;pointer-events:none;z-index:2;background:var(--page);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;white-space:nowrap;color:var(--ink-2)"></div>
   </div>
-</div>
-<div class="card">
-  <h2 id="maptitle">Playa wind — next 48h</h2>
-  <svg id="map" viewBox="0 0 800 300" role="img" aria-label="Wind direction over Black Rock City through time" style="width:100%;height:auto;display:block"></svg>
-  <div class="legend"><span style="color:var(--muted)">columns = time (same axis as gust chart) · arrows point downwind · length = strength · city shown for bearings</span></div>
 </div>
 <div class="card">
   <h2>7-day outlook</h2>
@@ -199,10 +181,9 @@ const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${
   `&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=7`;
 const CACHE_KEY = "brcwx-v1";
 const TTL = 10 * 60 * 1000;
-const SURFACES = { hard: [18, 30, 40], normal: [15, 25, 35], fluff: [12, 20, 28] };
-let surface = localStorage.getItem("brcwx-surface") || "normal";
-const LVL_META = [["Calm", "--good"], ["Breezy", "--warning"], ["Whiteout possible", "--serious"], ["Destructive", "--critical"]];
-const thresholds = () => SURFACES[surface];
+const TIERS = [15, 25, 35];
+const LVL_META = [["Calm", "--good"], ["Breezy", "--warning"], ["Strong", "--serious"], ["Destructive", "--critical"]];
+const thresholds = () => TIERS;
 
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const level = g => {
@@ -264,9 +245,9 @@ async function loadEns() {
 }
 
 const ACTIONS = [
-  { max: 20, emoji: "🟢", text: "Build window — all tasks good" },
-  { max: 30, emoji: "🟡", text: "OK to build — stake as you go, nothing left loose" },
-  { max: 38, emoji: "🟠", text: "Hold new shade/tarp work — pre-rig existing for fast strike" },
+  { max: 15, emoji: "🟢", text: "Build window — all tasks good" },
+  { max: 25, emoji: "🟡", text: "OK to build — stake as you go, nothing left loose" },
+  { max: 35, emoji: "🟠", text: "Hold new shade/tarp work — pre-rig existing for fast strike" },
   { max: Infinity, emoji: "🔴", text: "STRIKE TARPS" },
 ];
 
@@ -287,13 +268,13 @@ function renderDecision(times, i0, N, bestGust) {
   const now6 = peakIn(0, 6), day = peakIn(0, 24);
   const act = ACTIONS.find(a => now6.ew < a.max);
   let strikeLine = "";
-  if (day.ew >= 38) {
+  if (day.ew >= 35) {
     let firstK = 0;
-    for (let k = 0; k < Math.min(24, N); k++) { const s = stat(k); if ((s ? s.p90 : bestGust(i0 + k)) >= 38) { firstK = k; break; } }
+    for (let k = 0; k < Math.min(24, N); k++) { const s = stat(k); if ((s ? s.p90 : bestGust(i0 + k)) >= 35) { firstK = k; break; } }
     const tHit = fmtTime(times[i0 + firstK]);
     const tBy = fmtTime(times[i0 + Math.max(0, firstK - 3)]);
     strikeLine = `<div style="margin-top:6px;font-weight:600">🔴 Worst case hits ${Math.round(day.ew)} mph around ${tHit.toLocaleDateString([], { weekday: "short" })} ${tHit.toLocaleTimeString([], { hour: "numeric" })} — tarps down by ${tBy.toLocaleTimeString([], { hour: "numeric" })}</div>`;
-  } else if (day.ew >= 30 && now6.ew < 30) {
+  } else if (day.ew >= 25 && now6.ew < 25) {
     const tW = fmtTime(times[i0 + day.wAt]);
     strikeLine = `<div style="margin-top:6px;color:var(--ink-2)">Later today: worst case ${Math.round(day.ew)} mph around ${tW.toLocaleTimeString([], { hour: "numeric" })} — ${ACTIONS.find(a => day.ew < a.max).text.toLowerCase()}</div>`;
   }
@@ -302,17 +283,6 @@ function renderDecision(times, i0, N, bestGust) {
     <div style="color:var(--ink-2);margin-top:4px">Next 6h gusts: expected ${Math.round(now6.em)} mph · worst case ${Math.round(now6.ew)} mph</div>
     ${strikeLine}
     <div style="color:var(--muted);font-size:12px;margin-top:6px">${ENS ? `worst case = top 10% of ${stat(0)?.n ?? "~80"} independent forecast scenarios` : "scenario data unavailable — using model max"}</div>`;
-}
-
-function renderSurfSeg() {
-  const seg = document.getElementById("surfseg");
-  seg.innerHTML = [["hard", "hard-pack"], ["normal", "normal"], ["fluff", "fluff"]].map(([v, l]) =>
-    `<button class="${surface === v ? "on" : ""}" data-s="${v}">${l}</button>`).join("");
-  seg.querySelectorAll("button").forEach(b => b.onclick = () => {
-    surface = b.dataset.s;
-    try { localStorage.setItem("brcwx-surface", surface); } catch {}
-    if (lastRender) render(...lastRender);
-  });
 }
 
 function renderSquall(data, times, i0, N) {
@@ -394,12 +364,10 @@ function render(data, ts, stale) {
   renderTiles(data, i0, N, bestGust);
   renderChart(data, times, i0, N);
   renderStrip(data, times, i0, N, bestGust);
-  renderDirStrip(times, i0, N, bestGust, dirAt);
   renderEvents(times, i0, N, bestGust, dirAt);
   renderTemp(data, times, i0, N);
   renderMap(data, times, i0, N, bestGust);
   renderDays(data, times);
-  renderSurfSeg();
   renderSquall(data, times, i0, N);
   renderDecision(times, i0, N, bestGust);
 }
@@ -441,6 +409,7 @@ const FENCE = [
 const MAN = [40.7864, -119.2035];
 
 function renderMap(data, times, i0, N, bestGust) {
+  N = Math.min(24, N);
   const W = 800, H = 300, ML = 34, MR = 10, MT = 8, MB = 26;
   const iw = W - ML - MR, ih = H - MT - MB;
   const cx = W / 2, cy = MT + ih / 2, S = 78;
@@ -508,10 +477,11 @@ function renderMap(data, times, i0, N, bestGust) {
   document.getElementById("map").innerHTML = el;
 
   window.setMapHour = k => {
+    if (k >= N) return;
     const m = document.getElementById("mapmark");
-    const x = X(Math.min(k, N - 1) - (k % STEP));
+    const x = X(k - (k % STEP));
     m.setAttribute("x1", x); m.setAttribute("x2", x); m.setAttribute("opacity", "0.6");
-    document.getElementById("maptitle").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("map").scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => m.setAttribute("opacity", "0"), 4000);
   };
 }
@@ -630,26 +600,6 @@ function renderStrip(data, times, i0, N, bestGust) {
     `<span class="key"><span class="key-dot" style="background:var(${m[1]})"></span>${m[0]}${i < 3 ? " &lt;" + t[i] : " " + t[2] + "+"}</span>`).join("");
 }
 
-function renderDirStrip(times, i0, N, bestGust, dirAt) {
-  const box = document.getElementById("dirstrip");
-  box.innerHTML = "";
-  for (let k = 0; k < N; k += 2) {
-    const i = i0 + k;
-    const d = dirAt(i), g = bestGust(i);
-    const span = document.createElement("span");
-    if (d == null) span.textContent = "·";
-    else {
-      span.textContent = "↑";
-      span.style.transform = `rotate(${d + 180}deg)`;
-      span.style.color = css(level(g ?? 0).varname);
-      span.style.display = "inline-block";
-    }
-    const dt = fmtTime(times[i]);
-    span.title = `${dt.toLocaleTimeString([], { hour: "numeric" })} — from ${d == null ? "?" : compass(d)}`;
-    box.appendChild(span);
-  }
-}
-
 const PREVAILING = [180, 280];
 
 function renderEvents(times, i0, N, bestGust, dirAt) {
@@ -684,13 +634,13 @@ function renderEvents(times, i0, N, bestGust, dirAt) {
       if (Math.abs(delta) > 25) shift = ` · ${delta > 0 ? "veering" : "backing"} ${compass(d0)}→${compass(d1)}`;
     }
     const off = dp != null && (dp < PREVAILING[0] || dp > PREVAILING[1]);
-    const near = e.peakK < N;
+    const near = e.peakK < 24;
     return `<div class="ev" ${near ? `onclick="setMapHour(${e.peakK})"` : 'style="cursor:default"'}>
       <span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(${lv.varname})"></span>
       <span class="when">${fmtH(e.start)}–${fmtH(e.end)}</span>
       <span class="desc">peak ${Math.round(e.peak)} mph${dp == null ? "" : " from " + compass(dp) + " " + dirArrow(dp)}${shift}</span>
       ${off ? '<span class="flag">off-prevailing</span>' : ""}
-      <span class="jump">${near ? "tap → map" : "beyond HRRR — GFS/ECMWF only"}</span>
+      <span class="jump">${near ? "tap → map" : e.peakK < 48 ? "" : "beyond HRRR — GFS/ECMWF only"}</span>
     </div>`;
   }).join("");
 }
