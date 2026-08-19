@@ -144,7 +144,7 @@ footer a { color: var(--muted); }
   <h2 id="maptitle">Playa wind</h2>
   <svg id="map" viewBox="0 0 400 420" role="img" aria-label="Wind direction over Black Rock City" style="width:100%;max-width:440px;display:block;margin-inline:auto"></svg>
   <input id="maph" type="range" min="0" value="0" style="width:100%;margin-top:6px">
-  <div class="legend"><span id="maplabel" style="color:var(--ink)"></span></div>
+  <div class="legend"><span id="maplabel" style="color:var(--ink)"></span><span style="margin-left:auto;color:var(--muted)">tap map to play ▷</span></div>
 </div>
 <div class="card">
   <h2>7-day outlook</h2>
@@ -271,6 +271,7 @@ function renderTiles(data, i0, N, bestGust) {
       <div class="sub">at the trash fence it's worse</div></div>`;
 }
 
+let mapTimer = null;
 const FENCE = [
   [40.782814, -119.233566],
   [40.807028, -119.217274],
@@ -306,12 +307,13 @@ function renderMap(data, times, i0, N, bestGust) {
   const [fx, fy] = mi(FENCE[1]);
   el += `<text x="${fx + 6}" y="${fy - 6}" fill="${css("--muted")}" font-size="11">trash fence</text>`;
   el += `<text x="20" y="24" fill="${css("--ink-2")}" font-size="13" font-weight="600">N ↑</text>`;
-  el += `<defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="${css("--series")}"/></marker></defs>`;
   let arrows = "";
-  for (const off of [-82, 0, 82])
-    arrows += `<line x1="${cx + off}" y1="${cy + 150}" x2="${cx + off}" y2="${cy - 150}" stroke="${css("--series")}" stroke-width="2.5" opacity="0.85" marker-end="url(#ah)"/>`;
-  el += `<g id="windg" transform="rotate(0 ${cx} ${cy})">${arrows}</g>`;
+  const GS = 52;
+  for (let gx = -3; gx <= 3; gx++)
+    for (let gy = -3; gy <= 3; gy++)
+      arrows += `<g transform="translate(${cx + gx * GS} ${cy + gy * GS})"><g class="arr" style="transition:transform .3s;transform-origin:0 0">
+        <path d="M0 15 L0 -11 M-5 -5 L0 -13 L5 -5" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" opacity="0.85"/></g></g>`;
+  el = `<rect id="mapbg" x="2" y="2" width="396" height="416" rx="10" opacity="0.10"/>` + el + `<g id="windg">${arrows}</g>`;
   document.getElementById("map").innerHTML = el;
 
   const hours = [];
@@ -328,19 +330,26 @@ function renderMap(data, times, i0, N, bestGust) {
   slider.max = N - 1;
   if (+slider.value > N - 1) slider.value = 0;
   let rot = null;
+  const arrs = document.querySelectorAll("#map .arr");
+  const bg = document.getElementById("mapbg");
   const show = () => {
     const h = hours[+slider.value];
     const g = document.getElementById("windg");
+    const lv = level(h.gust ?? 0);
+    const col = css(lv.varname);
     if (h.dir != null) {
       const target = (h.dir + 180) % 360;
       if (rot == null) rot = target;
-      else rot += ((target - rot % 360 + 540) % 360) - 180;
-      g.style.transition = "transform .3s";
-      g.style.transformOrigin = `${cx}px ${cy}px`;
-      g.style.transform = `rotate(${rot}deg)`;
+      else rot += ((target - (rot % 360 + 360) % 360 + 540) % 360) - 180;
+      const spd = h.spd ?? (h.gust != null ? h.gust * 0.7 : 10);
+      const sc = 0.55 + 0.95 * Math.min(spd, 35) / 35;
+      arrs.forEach(a => {
+        a.style.transform = `rotate(${rot}deg) scale(${sc})`;
+        a.firstElementChild.setAttribute("stroke", col);
+      });
+      bg.setAttribute("fill", col);
       g.style.opacity = "1";
     } else g.style.opacity = "0.15";
-    const lv = level(h.gust ?? 0);
     document.getElementById("maplabel").innerHTML =
       `<span class="key"><span class="key-dot" style="background:var(${lv.varname})"></span>` +
       `${h.t.toLocaleDateString([], { weekday: "short" })} ${h.t.toLocaleTimeString([], { hour: "numeric" })} — ` +
@@ -348,8 +357,17 @@ function renderMap(data, times, i0, N, bestGust) {
       `${h.spd == null ? "" : " · " + Math.round(h.spd) + " mph"}` +
       `${h.gust == null ? "" : ", gusts " + Math.round(h.gust)}</span>`;
   };
-  slider.oninput = show;
+  const stopPlay = () => { if (mapTimer) { clearInterval(mapTimer); mapTimer = null; } };
+  stopPlay();
+  slider.oninput = () => { stopPlay(); show(); };
+  const svgm = document.getElementById("map");
+  svgm.style.cursor = "pointer";
+  svgm.onclick = () => {
+    if (mapTimer) return stopPlay();
+    mapTimer = setInterval(() => { slider.value = (+slider.value + 1) % N; show(); }, 350);
+  };
   window.setMapHour = k => {
+    stopPlay();
     slider.value = Math.min(k, N - 1);
     show();
     document.getElementById("maptitle").scrollIntoView({ behavior: "smooth", block: "start" });
