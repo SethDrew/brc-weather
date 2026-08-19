@@ -16,6 +16,7 @@
   --axis: #383835;
   --border: rgba(255,255,255,0.10);
   --series: #3987e5;
+  --series2: #d95926;
   --good: #0ca30c;
   --warning: #fab219;
   --serious: #ec835a;
@@ -33,6 +34,7 @@
     --axis: #c3c2b7;
     --border: rgba(11,11,11,0.10);
     --series: #2a78d6;
+    --series2: #eb6834;
   }
 }
 * { box-sizing: border-box; }
@@ -85,6 +87,15 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--ink-2); }
 .key-dot { width: 10px; height: 10px; border-radius: 50%; }
 #strip { display: flex; gap: 1px; margin-top: 10px; border-radius: 4px; overflow: hidden; }
 #strip div { flex: 1; height: 12px; }
+#dirstrip { display: flex; margin-top: 6px; }
+#dirstrip span { flex: 1; text-align: center; font-size: 15px; line-height: 1; }
+#events { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.ev { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; cursor: pointer; flex-wrap: wrap; }
+.ev .when { font-weight: 600; }
+.ev .desc { color: var(--ink-2); }
+.ev .flag { background: var(--critical); color: #fff; border-radius: 6px; padding: 1px 7px; font-size: 12px; font-weight: 600; }
+.ev .jump { color: var(--muted); font-size: 12px; margin-left: auto; }
+#noev { color: var(--muted); font-size: 13px; }
 .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 8px; }
 .day { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 13px; }
 .day .name { font-weight: 600; }
@@ -113,11 +124,21 @@ footer a { color: var(--muted); }
     <div id="tooltip"></div>
   </div>
   <div id="strip"></div>
+  <div id="dirstrip"></div>
   <div class="legend">
     <span class="key"><span class="key-line"></span>HRRR gusts</span>
     <span class="key"><span class="key-band"></span>Model spread (GFS · ECMWF · ICON)</span>
+    <span class="key">↗ arrows point downwind</span>
   </div>
   <div class="legend" id="striplegend"></div>
+  <div id="events"></div>
+</div>
+<div class="card">
+  <h2>Temperature — next 48h (°F)</h2>
+  <div id="tchartwrap" style="position:relative">
+    <svg id="tchart" viewBox="0 0 800 200" role="img" aria-label="Temperature forecast chart" style="width:100%;height:auto;display:block;touch-action:pan-y"></svg>
+    <div id="ttip" style="position:absolute;display:none;pointer-events:none;z-index:2;background:var(--page);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;white-space:nowrap;color:var(--ink-2)"></div>
+  </div>
 </div>
 <div class="card">
   <h2 id="maptitle">Playa wind</h2>
@@ -212,10 +233,14 @@ function render(data, ts, stale) {
     return vals.length ? Math.max(...vals) : null;
   };
 
+  const dirAt = i => get(data, "wind_direction_10m", "gfs_hrrr", i) ?? get(data, "wind_direction_10m", "gfs_seamless", i);
   renderTiles(data, i0, N, bestGust);
-  renderMap(data, times, i0, N, bestGust);
   renderChart(data, times, i0, N);
   renderStrip(data, times, i0, N, bestGust);
+  renderDirStrip(times, i0, N, bestGust, dirAt);
+  renderEvents(times, i0, N, bestGust, dirAt);
+  renderTemp(data, times, i0, N);
+  renderMap(data, times, i0, N, bestGust);
   renderDays(data, times);
 }
 
@@ -324,6 +349,11 @@ function renderMap(data, times, i0, N, bestGust) {
       `${h.gust == null ? "" : ", gusts " + Math.round(h.gust)}</span>`;
   };
   slider.oninput = show;
+  window.setMapHour = k => {
+    slider.value = Math.min(k, N - 1);
+    show();
+    document.getElementById("maptitle").scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   show();
 }
 
@@ -427,6 +457,141 @@ function renderStrip(data, times, i0, N, bestGust) {
   }
   document.getElementById("striplegend").innerHTML = LEVELS.map(l =>
     `<span class="key"><span class="key-dot" style="background:var(${l.varname})"></span>${l.name}${l.max !== Infinity ? " &lt;" + l.max : " 35+"}</span>`).join("");
+}
+
+function renderDirStrip(times, i0, N, bestGust, dirAt) {
+  const box = document.getElementById("dirstrip");
+  box.innerHTML = "";
+  for (let k = 0; k < N; k += 2) {
+    const i = i0 + k;
+    const d = dirAt(i), g = bestGust(i);
+    const span = document.createElement("span");
+    if (d == null) span.textContent = "·";
+    else {
+      span.textContent = "↑";
+      span.style.transform = `rotate(${d + 180}deg)`;
+      span.style.color = css(level(g ?? 0).varname);
+      span.style.display = "inline-block";
+    }
+    const dt = fmtTime(times[i]);
+    span.title = `${dt.toLocaleTimeString([], { hour: "numeric" })} — from ${d == null ? "?" : compass(d)}`;
+    box.appendChild(span);
+  }
+}
+
+const PREVAILING = [180, 280];
+
+function renderEvents(times, i0, N, bestGust, dirAt) {
+  const evs = [];
+  let cur = null;
+  const M = times.length - i0;
+  for (let k = 0; k < M; k++) {
+    const g = bestGust(i0 + k);
+    if (g != null && g >= 25) {
+      if (cur && k - cur.end <= 2) cur.end = k;
+      else { if (cur) evs.push(cur); cur = { start: k, end: k, peak: 0, peakK: k }; }
+      if (g > cur.peak) { cur.peak = g; cur.peakK = k; }
+    }
+  }
+  if (cur) evs.push(cur);
+  const box = document.getElementById("events");
+  if (!evs.filter(e => e.end > e.start).length) {
+    box.innerHTML = `<div id="noev">No wind events (sustained gusts ≥ 25 mph) in the next 7 days.</div>`;
+    return;
+  }
+  const fmtH = k => {
+    const d = fmtTime(times[i0 + k]);
+    return d.toLocaleDateString([], { weekday: "short" }) + " " + d.toLocaleTimeString([], { hour: "numeric" }).toLowerCase().replace(" ", "");
+  };
+  box.innerHTML = evs.filter(e => e.end > e.start).map(e => {
+    const d0 = dirAt(i0 + e.start), dp = dirAt(i0 + e.peakK), d1 = dirAt(i0 + e.end);
+    const lv = level(e.peak);
+    let shift = "";
+    if (d0 != null && d1 != null) {
+      const delta = ((d1 - d0 + 540) % 360) - 180;
+      if (Math.abs(delta) > 25) shift = ` · ${delta > 0 ? "veering" : "backing"} ${compass(d0)}→${compass(d1)}`;
+    }
+    const off = dp != null && (dp < PREVAILING[0] || dp > PREVAILING[1]);
+    const near = e.peakK < N;
+    return `<div class="ev" ${near ? `onclick="setMapHour(${e.peakK})"` : 'style="cursor:default"'}>
+      <span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(${lv.varname})"></span>
+      <span class="when">${fmtH(e.start)}–${fmtH(e.end)}</span>
+      <span class="desc">peak ${Math.round(e.peak)} mph${dp == null ? "" : " from " + compass(dp) + " " + dirArrow(dp)}${shift}</span>
+      ${off ? '<span class="flag">off-prevailing</span>' : ""}
+      <span class="jump">${near ? "tap → map" : "beyond HRRR — GFS/ECMWF only"}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderTemp(data, times, i0, N) {
+  const W = 800, H = 200, ML = 34, MR = 10, MT = 12, MB = 30;
+  const iw = W - ML - MR, ih = H - MT - MB;
+  const svg = document.getElementById("tchart");
+  const pts = [];
+  let tmin = 999, tmax = -999;
+  for (let k = 0; k < N; k++) {
+    const i = i0 + k;
+    const perModel = MODELS.map(m => get(data, "temperature_2m", m.id, i));
+    const valid = perModel.filter(v => v != null);
+    const p = { k, i, hrrr: perModel[0], lo: valid.length ? Math.min(...valid) : null, hi: valid.length ? Math.max(...valid) : null, perModel };
+    if (p.lo != null) { tmin = Math.min(tmin, p.lo); tmax = Math.max(tmax, p.hi); }
+    pts.push(p);
+  }
+  const y0 = Math.floor((tmin - 4) / 10) * 10, y1 = Math.ceil((tmax + 4) / 10) * 10;
+  const X = k => ML + (k / (N - 1)) * iw;
+  const Y = v => MT + ih - ((v - y0) / (y1 - y0)) * ih;
+
+  let el = "";
+  for (let v = y0 + 10; v < y1; v += 10)
+    el += `<line x1="${ML}" y1="${Y(v)}" x2="${W - MR}" y2="${Y(v)}" stroke="${css("--grid")}" stroke-width="1"/>` +
+          `<text x="${ML - 6}" y="${Y(v) + 4}" fill="${css("--muted")}" font-size="11" text-anchor="end" font-variant-numeric="tabular-nums">${v}</text>`;
+  el += `<line x1="${ML}" y1="${MT + ih}" x2="${W - MR}" y2="${MT + ih}" stroke="${css("--axis")}" stroke-width="1"/>`;
+  for (let k = 0; k < N; k++) {
+    const d = fmtTime(times[i0 + k]);
+    const h = d.getHours();
+    if (h % 6 === 0) {
+      const lab = h === 0 ? d.toLocaleDateString([], { weekday: "short" }) : d.toLocaleTimeString([], { hour: "numeric" }).toLowerCase().replace(" ", "");
+      el += `<text x="${X(k)}" y="${H - 10}" fill="${css("--muted")}" font-size="11" text-anchor="middle" ${h === 0 ? 'font-weight="600"' : ""}>${lab}</text>`;
+      if (h === 0 && k > 0) el += `<line x1="${X(k)}" y1="${MT}" x2="${X(k)}" y2="${MT + ih}" stroke="${css("--axis")}" stroke-width="1"/>`;
+    }
+  }
+  const bandPts = pts.filter(p => p.lo != null);
+  if (bandPts.length > 1) {
+    const top = bandPts.map(p => `${X(p.k)},${Y(p.hi)}`).join(" ");
+    const bot = [...bandPts].reverse().map(p => `${X(p.k)},${Y(p.lo)}`).join(" ");
+    el += `<polygon points="${top} ${bot}" fill="${css("--series2")}" opacity="0.15"/>`;
+  }
+  const linePts = pts.filter(p => p.hrrr != null);
+  if (linePts.length > 1)
+    el += `<polyline points="${linePts.map(p => `${X(p.k)},${Y(p.hrrr)}`).join(" ")}" fill="none" stroke="${css("--series2")}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const ext = linePts.length ? linePts.reduce((a, p) => p.hrrr > a.hrrr ? p : a) : null;
+  if (ext)
+    el += `<circle cx="${X(ext.k)}" cy="${Y(ext.hrrr)}" r="4" fill="${css("--series2")}" stroke="${css("--surface")}" stroke-width="2"/>` +
+          `<text x="${X(ext.k)}" y="${Y(ext.hrrr) - 8}" fill="${css("--ink-2")}" font-size="11" text-anchor="middle">${Math.round(ext.hrrr)}°</text>`;
+  el += `<line id="txhair" x1="0" y1="${MT}" x2="0" y2="${MT + ih}" stroke="${css("--ink-2")}" stroke-width="1" opacity="0" pointer-events="none"/>`;
+  svg.innerHTML = el;
+
+  const tip = document.getElementById("ttip");
+  const onmove = ev => {
+    const rect = svg.getBoundingClientRect();
+    const cxp = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+    const k = Math.max(0, Math.min(N - 1, Math.round(((cxp / rect.width) * W - ML) / iw * (N - 1))));
+    const p = pts[k];
+    const xh = svg.querySelector("#txhair");
+    xh.setAttribute("x1", X(k)); xh.setAttribute("x2", X(k)); xh.setAttribute("opacity", "0.5");
+    const dt = fmtTime(times[p.i]);
+    tip.innerHTML = `<b style="color:var(--ink)">${dt.toLocaleDateString([], { weekday: "short" })} ${dt.toLocaleTimeString([], { hour: "numeric" })}</b> ` +
+      `${p.hrrr == null ? (p.hi == null ? "—" : Math.round(p.lo) + "–" + Math.round(p.hi) + "°") : Math.round(p.hrrr) + "°"}` +
+      `${p.hrrr != null && p.hi != null ? ` <span style="color:var(--muted)">(models ${Math.round(p.lo)}–${Math.round(p.hi)}°)</span>` : ""}`;
+    tip.style.display = "block";
+    const left = (X(k) / W) * rect.width;
+    tip.style.left = Math.min(rect.width - tip.offsetWidth - 4, Math.max(4, left + 12)) + "px";
+    tip.style.top = "6px";
+  };
+  svg.onmousemove = onmove;
+  svg.ontouchstart = onmove;
+  svg.ontouchmove = onmove;
+  svg.onmouseleave = () => { tip.style.display = "none"; svg.querySelector("#txhair").setAttribute("opacity", "0"); };
 }
 
 function renderDays(data, times) {
