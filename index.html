@@ -134,6 +134,7 @@ footer a { color: var(--muted); }
 <div id="stale"></div>
 <div id="alerts"></div>
 <div id="squall" style="display:none"></div>
+<div class="card" id="decide" style="display:none"></div>
 <div class="tiles" id="tiles"></div>
 <div id="obsbar"></div>
 <div class="card">
@@ -147,6 +148,7 @@ footer a { color: var(--muted); }
   <div class="legend">
     <span class="key"><span class="key-line"></span>HRRR gusts</span>
     <span class="key"><span class="key-band"></span>Model spread (GFS · ECMWF · ICON)</span>
+    <span class="key"><span style="display:inline-block;width:18px;border-top:2px dashed var(--critical)"></span>Worst case (top 10% of scenarios)</span>
     <span class="key">↗ arrows point downwind</span>
   </div>
   <div class="legend" id="striplegend"></div>
@@ -237,6 +239,72 @@ async function load(force) {
 }
 
 let lastRender = null;
+let ENS = null;
+
+const ENS_API = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${LAT}&longitude=${LON}` +
+  `&hourly=wind_gusts_10m&models=gfs025,ecmwf_ifs025&wind_speed_unit=mph&timezone=America%2FLos_Angeles&forecast_days=3`;
+
+async function loadEns() {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem("brcwx-ens")); } catch {}
+  let j = null;
+  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) j = cached.data;
+  else {
+    try {
+      j = await (await fetch(ENS_API)).json();
+      try { localStorage.setItem("brcwx-ens", JSON.stringify({ ts: Date.now(), data: j })); } catch {}
+    } catch { j = cached ? cached.data : null; }
+  }
+  if (!j || !j.hourly) return;
+  const keys = Object.keys(j.hourly).filter(k => k.startsWith("wind_gusts_10m"));
+  ENS = new Map();
+  j.hourly.time.forEach((t, i) => {
+    const vals = keys.map(k => j.hourly[k][i]).filter(v => v != null).sort((a, b) => a - b);
+    if (vals.length > 5) ENS.set(t, { med: vals[Math.floor(vals.length * 0.5)], p90: vals[Math.floor(vals.length * 0.9)], n: vals.length });
+  });
+  if (lastRender) render(...lastRender);
+}
+
+const ACTIONS = [
+  { max: 20, emoji: "🟢", text: "Build window — all tasks good" },
+  { max: 30, emoji: "🟡", text: "OK to build — stake as you go, nothing left loose" },
+  { max: 38, emoji: "🟠", text: "Hold new shade/tarp work — pre-rig existing for fast strike" },
+  { max: Infinity, emoji: "🔴", text: "STRIKE TARPS" },
+];
+
+function renderDecision(times, i0, N, bestGust) {
+  const card = document.getElementById("decide");
+  const stat = k => ENS && ENS.get(times[i0 + k]);
+  const peakIn = (a, b) => {
+    let em = 0, ew = 0, wAt = a;
+    for (let k = a; k < Math.min(b, N); k++) {
+      const s = stat(k);
+      const wc = s ? s.p90 : bestGust(i0 + k);
+      const md = s ? s.med : bestGust(i0 + k);
+      if (md != null && md > em) em = md;
+      if (wc != null && wc > ew) { ew = wc; wAt = k; }
+    }
+    return { em, ew, wAt };
+  };
+  const now6 = peakIn(0, 6), day = peakIn(0, 24);
+  const act = ACTIONS.find(a => now6.ew < a.max);
+  let strikeLine = "";
+  if (day.ew >= 38) {
+    let firstK = 0;
+    for (let k = 0; k < Math.min(24, N); k++) { const s = stat(k); if ((s ? s.p90 : bestGust(i0 + k)) >= 38) { firstK = k; break; } }
+    const tHit = fmtTime(times[i0 + firstK]);
+    const tBy = fmtTime(times[i0 + Math.max(0, firstK - 3)]);
+    strikeLine = `<div style="margin-top:6px;font-weight:600">🔴 Worst case hits ${Math.round(day.ew)} mph around ${tHit.toLocaleDateString([], { weekday: "short" })} ${tHit.toLocaleTimeString([], { hour: "numeric" })} — tarps down by ${tBy.toLocaleTimeString([], { hour: "numeric" })}</div>`;
+  } else if (day.ew >= 30 && now6.ew < 30) {
+    const tW = fmtTime(times[i0 + day.wAt]);
+    strikeLine = `<div style="margin-top:6px;color:var(--ink-2)">Later today: worst case ${Math.round(day.ew)} mph around ${tW.toLocaleTimeString([], { hour: "numeric" })} — ${ACTIONS.find(a => day.ew < a.max).text.toLowerCase()}</div>`;
+  }
+  card.style.display = "block";
+  card.innerHTML = `<div style="font-size:19px;font-weight:600">${act.emoji} ${act.text}</div>
+    <div style="color:var(--ink-2);margin-top:4px">Next 6h gusts: expected ${Math.round(now6.em)} mph · worst case ${Math.round(now6.ew)} mph</div>
+    ${strikeLine}
+    <div style="color:var(--muted);font-size:12px;margin-top:6px">${ENS ? `worst case = top 10% of ${stat(0)?.n ?? "~80"} independent forecast scenarios` : "scenario data unavailable — using model max"}</div>`;
+}
 
 function renderSurfSeg() {
   const seg = document.getElementById("surfseg");
@@ -268,8 +336,8 @@ function renderSquall(data, times, i0, N) {
     return d.toLocaleDateString([], { weekday: "short" }) + " " + d.toLocaleTimeString([], { hour: "numeric" }).toLowerCase().replace(" ", "");
   };
   box.style.display = "block";
-  box.innerHTML = `⛈ Squall watch ${ranges.map(r => fmtH(r.start) + "–" + fmtH(r.end)).join(", ")} — ` +
-    `storm outflow can far exceed forecast gusts (Aug&nbsp;'25: models ~25, measured 52)`;
+  box.innerHTML = `⚡ Sudden-blast risk ${ranges.map(r => fmtH(r.start) + "–" + fmtH(r.end)).join(", ")} — ` +
+    `storms in the area can hit 45+ mph with under an hour's warning. Pre-rig tarps for fast strike.`;
 }
 
 async function fetchAlerts() {
@@ -335,6 +403,7 @@ function render(data, ts, stale) {
   renderDays(data, times);
   renderSurfSeg();
   renderSquall(data, times, i0, N);
+  renderDecision(times, i0, N, bestGust);
 }
 
 function renderTiles(data, i0, N, bestGust) {
@@ -488,6 +557,7 @@ function renderChart(data, times, i0, N) {
     if (p.hi != null && p.hi > ymax) ymax = p.hi;
     pts.push(p);
   }
+  if (ENS) for (const p of pts) { const s = ENS.get(times[p.i]); if (s && s.p90 > ymax) ymax = s.p90; }
   ymax = Math.ceil(ymax / 10) * 10 + 5;
   const X = k => ML + (k / (N - 1)) * iw;
   const Y = v => MT + ih - (v / ymax) * ih;
@@ -517,6 +587,11 @@ function renderChart(data, times, i0, N) {
     const top = bandPts.map(p => `${X(p.k)},${Y(p.hi)}`).join(" ");
     const bot = [...bandPts].reverse().map(p => `${X(p.k)},${Y(p.lo)}`).join(" ");
     el += `<polygon points="${top} ${bot}" fill="${css("--series")}" opacity="0.15"/>`;
+  }
+  if (ENS) {
+    const wc = pts.map(p => ({ k: p.k, v: ENS.get(times[p.i])?.p90 })).filter(p => p.v != null);
+    if (wc.length > 1)
+      el += `<polyline points="${wc.map(p => `${X(p.k)},${Y(p.v)}`).join(" ")}" fill="none" stroke="${css("--critical")}" stroke-width="2" stroke-dasharray="5 4" opacity="0.7" stroke-linejoin="round"/>`;
   }
   const linePts = pts.filter(p => p.hrrr != null);
   if (linePts.length > 1)
@@ -754,8 +829,9 @@ document.getElementById("afd").addEventListener("toggle", async ev => {
   }
 });
 
-document.getElementById("refresh").addEventListener("click", () => { load(true); fetchAlerts(); fetchObs(); });
+document.getElementById("refresh").addEventListener("click", () => { load(true); loadEns(); fetchAlerts(); fetchObs(); });
 load(false);
+loadEns();
 fetchAlerts();
 fetchObs();
 </script>
