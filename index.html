@@ -120,6 +120,12 @@ footer a { color: var(--muted); }
   <div class="legend" id="striplegend"></div>
 </div>
 <div class="card">
+  <h2 id="maptitle">Playa wind</h2>
+  <svg id="map" viewBox="0 0 400 420" role="img" aria-label="Wind direction over Black Rock City" style="width:100%;max-width:440px;display:block;margin-inline:auto"></svg>
+  <input id="maph" type="range" min="0" value="0" style="width:100%;margin-top:6px">
+  <div class="legend"><span id="maplabel" style="color:var(--ink)"></span></div>
+</div>
+<div class="card">
   <h2>7-day outlook</h2>
   <div class="days" id="days"></div>
 </div>
@@ -207,6 +213,7 @@ function render(data, ts, stale) {
   };
 
   renderTiles(data, i0, N, bestGust);
+  renderMap(data, times, i0, N, bestGust);
   renderChart(data, times, i0, N);
   renderStrip(data, times, i0, N, bestGust);
   renderDays(data, times);
@@ -237,6 +244,87 @@ function renderTiles(data, i0, N, bestGust) {
     <div class="tile"><div class="label">Temp</div>
       <div class="value">${t == null ? "—" : Math.round(t) + "°"}</div>
       <div class="sub">at the trash fence it's worse</div></div>`;
+}
+
+const FENCE = [
+  [40.782814, -119.233566],
+  [40.807028, -119.217274],
+  [40.802722, -119.181931],
+  [40.775113, -119.176392],
+  [40.763558, -119.208301],
+];
+const MAN = [40.7864, -119.2035];
+
+function renderMap(data, times, i0, N, bestGust) {
+  const cx = 200, cy = 205, S = 100;
+  const mi = ([lat, lon]) => [
+    cx + (lon - MAN[1]) * Math.cos(MAN[0] * Math.PI / 180) * 69.17 * S,
+    cy - (lat - MAN[0]) * 69.05 * S,
+  ];
+  const pol = (b, r) => [cx + r * Math.sin(b * Math.PI / 180), cy - r * Math.cos(b * Math.PI / 180)];
+  const fencePts = FENCE.map(mi).map(p => p.map(v => v.toFixed(1)).join(",")).join(" ");
+
+  let el = `<polygon points="${fencePts}" fill="none" stroke="${css("--muted")}" stroke-width="1" stroke-dasharray="4 4"/>`;
+  for (const r of [47, 76, 105]) {
+    const [x1, y1] = pol(105, r), [x2, y2] = pol(345, r);
+    el += `<path d="M ${x1} ${y1} A ${r} ${r} 0 1 1 ${x2} ${y2}" fill="none" stroke="${css("--axis")}" stroke-width="1"/>`;
+  }
+  for (let b = 105; b <= 345; b += 30) {
+    const [x1, y1] = pol(b, 47), [x2, y2] = pol(b, 105);
+    el += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${css("--axis")}" stroke-width="1"/>`;
+  }
+  el += `<circle cx="${cx}" cy="${cy}" r="4" fill="${css("--ink-2")}"/>`;
+  const [tx, ty] = pol(45, 52);
+  el += `<circle cx="${tx}" cy="${ty}" r="3" fill="${css("--ink-2")}"/>`;
+  el += `<text x="${cx}" y="${cy + 16}" fill="${css("--muted")}" font-size="11" text-anchor="middle">Man</text>`;
+  el += `<text x="${tx + 8}" y="${ty}" fill="${css("--muted")}" font-size="11">Temple</text>`;
+  const [fx, fy] = mi(FENCE[1]);
+  el += `<text x="${fx + 6}" y="${fy - 6}" fill="${css("--muted")}" font-size="11">trash fence</text>`;
+  el += `<text x="20" y="24" fill="${css("--ink-2")}" font-size="13" font-weight="600">N ↑</text>`;
+  el += `<defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="${css("--series")}"/></marker></defs>`;
+  let arrows = "";
+  for (const off of [-82, 0, 82])
+    arrows += `<line x1="${cx + off}" y1="${cy + 150}" x2="${cx + off}" y2="${cy - 150}" stroke="${css("--series")}" stroke-width="2.5" opacity="0.85" marker-end="url(#ah)"/>`;
+  el += `<g id="windg" transform="rotate(0 ${cx} ${cy})">${arrows}</g>`;
+  document.getElementById("map").innerHTML = el;
+
+  const hours = [];
+  for (let k = 0; k < N; k++) {
+    const i = i0 + k;
+    hours.push({
+      dir: get(data, "wind_direction_10m", "gfs_hrrr", i) ?? get(data, "wind_direction_10m", "gfs_seamless", i),
+      spd: get(data, "wind_speed_10m", "gfs_hrrr", i) ?? get(data, "wind_speed_10m", "gfs_seamless", i),
+      gust: bestGust(i),
+      t: fmtTime(times[i]),
+    });
+  }
+  const slider = document.getElementById("maph");
+  slider.max = N - 1;
+  if (+slider.value > N - 1) slider.value = 0;
+  let rot = null;
+  const show = () => {
+    const h = hours[+slider.value];
+    const g = document.getElementById("windg");
+    if (h.dir != null) {
+      const target = (h.dir + 180) % 360;
+      if (rot == null) rot = target;
+      else rot += ((target - rot % 360 + 540) % 360) - 180;
+      g.style.transition = "transform .3s";
+      g.style.transformOrigin = `${cx}px ${cy}px`;
+      g.style.transform = `rotate(${rot}deg)`;
+      g.style.opacity = "1";
+    } else g.style.opacity = "0.15";
+    const lv = level(h.gust ?? 0);
+    document.getElementById("maplabel").innerHTML =
+      `<span class="key"><span class="key-dot" style="background:var(${lv.varname})"></span>` +
+      `${h.t.toLocaleDateString([], { weekday: "short" })} ${h.t.toLocaleTimeString([], { hour: "numeric" })} — ` +
+      `${h.dir == null ? "no wind data" : "from " + compass(h.dir) + " (" + Math.round(h.dir) + "°)"}` +
+      `${h.spd == null ? "" : " · " + Math.round(h.spd) + " mph"}` +
+      `${h.gust == null ? "" : ", gusts " + Math.round(h.gust)}</span>`;
+  };
+  slider.oninput = show;
+  show();
 }
 
 function renderChart(data, times, i0, N) {
