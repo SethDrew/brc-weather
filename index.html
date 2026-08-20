@@ -24,6 +24,10 @@
   --warning: #fab219;
   --serious: #ec835a;
   --critical: #d03b3b;
+  --w-calm: #12a150;
+  --w-breezy: #e0a40f;
+  --w-strong: #e5352a;
+  --w-destruct: #a234d6;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -95,6 +99,10 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--ink-2); }
 #tooltip td { padding: 1px 6px 1px 0; font-variant-numeric: tabular-nums; }
 .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-top: 8px; }
 .panelh { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 18px 0 2px; }
+#campmodal { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center; padding: 24px; background: rgba(0,0,0,0.85); cursor: zoom-out; }
+#campmodal.open { display: flex; }
+#campmodal img { max-width: 100%; max-height: 86vh; border-radius: 10px; background: #fff; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+#campmodal .cap { position: absolute; top: 16px; left: 16px; right: 16px; text-align: center; color: #fff; font-size: 13px; opacity: 0.85; }
 .legend .key { display: inline-flex; align-items: center; gap: 6px; }
 .key-line { width: 18px; height: 2px; background: var(--series); border-radius: 1px; }
 .key-band { width: 18px; height: 10px; background: var(--series); opacity: .18; border-radius: 2px; }
@@ -166,12 +174,18 @@ footer a { color: var(--muted); }
     <div id="afdtext">expand to load…</div>
   </details>
 </div>
+<div id="campmodal" onclick="closeCamp()">
+  <div class="cap">Our camp — 4:00 &amp; A · top = 4:00 St, right = A · tap anywhere to close</div>
+  <img src="camp-layout.png" alt="Camp layout — Dusty Scouts of Camp Campy Camp">
+</div>
 <footer>
   Black Rock City · 40.786, −119.204 ·
   Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC-BY 4.0) ·
   Discussion from <a href="https://www.weather.gov/rev/">NWS Reno</a>
 </footer>
 <script>
+window.openCamp = () => document.getElementById("campmodal").classList.add("open");
+window.closeCamp = () => document.getElementById("campmodal").classList.remove("open");
 const LAT = 40.786, LON = -119.204;
 const MODELS = [
   { id: "gfs_hrrr", label: "HRRR" },
@@ -186,7 +200,7 @@ const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${
 const CACHE_KEY = "brcwx-v1";
 const TTL = 10 * 60 * 1000;
 const TIERS = [15, 25, 35];
-const LVL_META = [["Calm", "--good"], ["Breezy", "--warning"], ["Strong", "--serious"], ["Destructive", "--critical"]];
+const LVL_META = [["Calm", "--w-calm"], ["Breezy", "--w-breezy"], ["Strong", "--w-strong"], ["Destructive", "--w-destruct"]];
 const thresholds = () => TIERS;
 
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -369,8 +383,14 @@ function renderMap(data, times, i0, N, bestGust) {
   el += `<text x="${tx + 8}" y="${ty}" fill="${css("--muted")}" font-size="11">Temple</text>`;
   const [fx, fy] = mi(FENCE[1]);
   el += `<text x="${fx + 6}" y="${fy - 6}" fill="${css("--muted")}" font-size="11">trash fence</text>`;
-  el += `<text x="20" y="24" fill="${css("--ink-2")}" font-size="13" font-weight="600">N ↑</text>`;
-  el = `<g opacity="0.4">${el}</g>`;
+  const LS = 0.78, LCX = 232, LCY = cy;
+  const locT = `translate(${LCX} ${LCY}) scale(${LS}) translate(${-cx} ${-cy})`;
+  const sc = 0.27, Ccx = 556, Ccy = cy;
+  const cA = 0.1736, cB = 0.9848, cC = -0.9848, cD = 0.1736;
+  const campT = `translate(${Ccx} ${Ccy}) matrix(${sc * cA} ${sc * cB} ${sc * cC} ${sc * cD} 0 0)`;
+  el = `<g transform="${campT}" style="cursor:pointer" onclick="openCamp()"><image x="-351.5" y="-588.5" width="703" height="1177" href="camp-layout.png" opacity="0.34"><title>Our camp — oriented to true north · tap to enlarge</title></image></g>`
+     + `<g transform="${locT}"><g opacity="0.5">${el}</g></g>`
+     + `<text x="20" y="24" fill="${css("--ink-2")}" font-size="13" font-weight="600">N ↑</text>`;
 
   const X = k => ML + (k / (N - 1)) * iw;
   const STEP = N > 40 ? 3 : 2;
@@ -407,6 +427,14 @@ function renderMap(data, times, i0, N, bestGust) {
     }
   }
   el += `<line id="mapmark" x1="0" y1="${MT}" x2="0" y2="${MT + ih}" stroke="${css("--ink")}" stroke-width="2" opacity="0"/>`;
+  const [px0, py0] = pol(165, 44);
+  const cpx = LCX + LS * (px0 - cx), cpy = LCY + LS * (py0 - cy);
+  el += `<g>
+    <title>Our camp</title>
+    <circle cx="${cpx}" cy="${cpy}" r="6" fill="#25c4e6" stroke="#fff" stroke-width="2"/>
+    <circle cx="${cpx}" cy="${cpy}" r="2" fill="#fff"/>
+    <text x="${cpx}" y="${cpy - 11}" fill="#25c4e6" font-size="10" font-weight="700" text-anchor="middle" paint-order="stroke" stroke="${css("--surface")}" stroke-width="3">CCC</text>
+  </g>`;
   document.getElementById("map").innerHTML = el;
 
   window.setMapHour = k => {
@@ -450,9 +478,10 @@ function renderChart(data, times, i0, N) {
           `<text x="${ML - 6}" y="${Y(v) + 4}" fill="${css("--muted")}" font-size="11" text-anchor="end" font-variant-numeric="tabular-nums">${v}</text>`;
   el += `<line x1="${ML}" y1="${Y(0)}" x2="${W - MR}" y2="${Y(0)}" stroke="${css("--axis")}" stroke-width="1"/>`;
 
-  for (const th of [thresholds()[1], thresholds()[2]])
-    el += `<line x1="${ML}" y1="${Y(th)}" x2="${W - MR}" y2="${Y(th)}" stroke="${css(th === thresholds()[1] ? "--serious" : "--critical")}" stroke-width="1" opacity="0.5"/>` +
+  thresholds().forEach((th, ti) => {
+    el += `<line x1="${ML}" y1="${Y(th)}" x2="${W - MR}" y2="${Y(th)}" stroke="${css(LVL_META[ti + 1][1])}" stroke-width="1" opacity="0.5"/>` +
           `<text x="${W - MR - 2}" y="${Y(th) - 3}" fill="${css("--muted")}" font-size="10" text-anchor="end">${th}</text>`;
+  });
 
   for (let k = 0; k < N; k++) {
     const d = fmtTime(times[i0 + k]);
